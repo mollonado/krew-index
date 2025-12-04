@@ -1,3 +1,6 @@
 [submodule "sources/kubectl-assume-sa"]
 	path = sources/kubectl-assume-sa
 	url = https://github.com/mollonado/kubectl-assume-sa.git
+[submodule "sources/kubectl-whoami"]
+	path = sources/kubectl-whoami
+	url = https://github.com/mollonado/kubectl-whoami.git

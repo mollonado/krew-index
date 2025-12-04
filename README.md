@@ -38,6 +38,20 @@ kubectl assume-sa <service-account-name>
 kubectl assume-sa <service-account-name> -n <namespace>
 ```
 
+### kubectl whoami
+
+Display your current Kubernetes user identity, groups, and context.
+
+**Install:**
+```bash
+kubectl krew install mollonado/whoami
+```
+
+**Usage:**
+```bash
+kubectl whoami
+```
+
 ## Setup Instructions (for maintainers)
 
 If you want to add a new plugin as a git submodule:
