@@ -1,0 +1,54 @@
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: assume-sa
+spec:
+  version: v0.1.0
+  homepage: https://github.com/mollonado/kubectl-assume-sa
+  shortDescription: Assume a Kubernetes ServiceAccount identity
+  description: |
+    A kubectl plugin that allows you to assume a Kubernetes ServiceAccount by 
+    extracting its token from a running pod and generating a kubeconfig for direct access.
+    
+    This script:
+    1. Extracts the ServiceAccount token from a running pod
+    2. Retrieves cluster information including the API server endpoint and CA certificate
+    3. Generates a kubeconfig file that allows you to authenticate as that ServiceAccount
+    4. Optionally launches kubie for an isolated shell session with the ServiceAccount context
+    
+    This is useful for:
+    - Testing ServiceAccount permissions
+    - Debugging RBAC issues
+    - Understanding what a pod can/cannot do in the cluster
+    - Development and troubleshooting
+
+    Usage:
+
+      Assume a ServiceAccount (finds a pod using it):
+      $ kubectl assume-sa <service-account-name>
+      
+      Assume a ServiceAccount in a specific namespace:
+      $ kubectl assume-sa <service-account-name> -n <namespace>
+  caveats: |
+    Required permissions:
+    - Copy files from pods (kubectl cp)
+    - Read ConfigMaps in kube-system and kube-public namespaces
+    - Get pod information
+    
+    Optional: Install kubie for isolated context switching
+  platforms:
+  - selector:
+      matchExpressions:
+      - key: os
+        operator: In
+        values:
+        - darwin
+        - linux
+    uri: https://github.com/mollonado/kubectl-assume-sa/archive/v0.1.0.tar.gz
+    sha256: 4f78e68a4cedab2750d10d97beb4e86cf33cf09baf0fefdfc4596ffb82e4550d
+    files:
+    - from: kubectl-assume-sa-0.1.0/kubectl-assume_sa
+      to: .
+    - from: kubectl-assume-sa-0.1.0/README.md
+      to: .
+    bin: kubectl-assume_sa

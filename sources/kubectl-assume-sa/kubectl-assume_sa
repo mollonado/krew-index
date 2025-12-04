@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: kubectl assume-sa <pod> [outfile]"
+  exit 1
+fi
+
+POD="$1"
+OUT="${2:-}"
+
+# Resolve current namespace from kubectl context
+CURRENT_NS=$(kubectl config view --minify --output jsonpath='{..namespace}' || true)
+NS="${CURRENT_NS:-default}"
+
+echo "Using namespace: ${NS}"
+
+TOKEN_PATH="/var/run/secrets/kubernetes.io/serviceaccount/..data/token"
+
+echo "Extracting projected token from pod '${POD}'..."
+
+TMP_TOKEN="$(mktemp)"
+
+kubectl cp "${NS}/${POD}:${TOKEN_PATH}" "$TMP_TOKEN" >/dev/null
+
+if [[ ! -s "$TMP_TOKEN" ]]; then
+  echo "Failed to extract token from pod. It may not exist or permissions may be insufficient."
+  rm -f "$TMP_TOKEN"
+  exit 1
+fi
+
+echo "Token extracted successfully."
+
+echo "Detecting ServiceAccount for the pod..."
+
+SA=$(kubectl get pod "$POD" -n "$NS" -o jsonpath='{.spec.serviceAccountName}')
+
+if [[ -z "$SA" ]]; then
+  echo "Unable to determine ServiceAccount for pod."
+  rm -f "$TMP_TOKEN"
+  exit 1
+fi
+
+echo "ServiceAccount: ${SA}"
+
+# Determine output filename based on SA and namespace only
+KUBE_DIR="${HOME}/.kube"
+if [[ -z "$OUT" ]]; then
+  mkdir -p "$KUBE_DIR"
+  OUT="$KUBE_DIR/assume-sa-${SA}-${NS}.yaml"
+fi
+
+echo "Resolving real Kubernetes API server endpoint using kube-proxy ConfigMap..."
+
+# Fetch kubeconfig text from kube-proxy ConfigMap
+KPROXY_KUBECONFIG=$(kubectl get configmap kube-proxy -n kube-system -o jsonpath='{.data.kubeconfig}')
+
+if [[ -z "$KPROXY_KUBECONFIG" ]]; then
+  echo "Failed to fetch kube-proxy kubeconfig from ConfigMap."
+  rm -f "$TMP_TOKEN"
+  exit 1
+fi
+
+# Extract 'server: <real-url>' (first occurrence)
+REAL_SERVER=$(echo "$KPROXY_KUBECONFIG" | grep 'server:' | head -n1 | awk '{print $2}')
+
+if [[ -z "$REAL_SERVER" ]]; then
+  echo "Failed to extract API server endpoint from kube-proxy kubeconfig."
+  rm -f "$TMP_TOKEN"
+  exit 1
+fi
+
+echo "Real API endpoint: ${REAL_SERVER}"
+
+echo "Fetching Kubernetes cluster CA certificate..."
+
+CA_FILE="$(mktemp)"
+kubectl get configmap -n kube-public kube-root-ca.crt \
+    -o jsonpath='{.data.ca\.crt}' > "$CA_FILE"
+
+if [[ ! -s "$CA_FILE" ]]; then
+  echo "Failed to fetch cluster CA certificate."
+  rm -f "$TMP_TOKEN" "$CA_FILE"
+  exit 1
+fi
+
+echo "Generating kubeconfig..."
+
+# Get current cluster and context names
+CURRENT_CLUSTER=$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')
+CURRENT_CONTEXT=$(kubectl config view --minify -o jsonpath='{.contexts[0].name}')
+
+if [[ -z "$CURRENT_CLUSTER" || -z "$CURRENT_CONTEXT" ]]; then
+  echo "Failed to extract current cluster/context name."
+  rm -f "$TMP_TOKEN" "$CA_FILE"
+  exit 1
+fi
+
+# Create new names with service account suffix
+NEW_CLUSTER_NAME="${CURRENT_CLUSTER}-${SA}"
+NEW_CONTEXT_NAME="${CURRENT_CONTEXT}-${SA}"
+
+# Read the token
+TOKEN=$(cat "$TMP_TOKEN")
+
+# Generate kubeconfig manually
+cat > "$OUT" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: ${NEW_CLUSTER_NAME}
+  cluster:
+    certificate-authority-data: $(cat "$CA_FILE" | base64)
+    server: ${REAL_SERVER}
+contexts:
+- name: ${NEW_CONTEXT_NAME}
+  context:
+    cluster: ${NEW_CLUSTER_NAME}
+    namespace: ${NS}
+    user: ${SA}
+current-context: ${NEW_CONTEXT_NAME}
+users:
+- name: ${SA}
+  user:
+    token: ${TOKEN}
+EOF
+
+rm -f "$TMP_TOKEN" "$CA_FILE"
+
+echo "Kubeconfig written to: $OUT"
+echo
+echo "Cluster configuration updated:"
+echo "  Server: $REAL_SERVER"
+echo "  CA: Embedded from kube-root-ca.crt"
+echo "  Cluster: ${NEW_CLUSTER_NAME}"
+echo "  Context: ${NEW_CONTEXT_NAME}"
+echo "  Namespace: ${NS}"
+echo
+
+# Check if kubie is available
+if command -v kubie >/dev/null 2>&1; then
+  echo "Switching to kubie context with namespace ${NS}..."
+  exec kubie ctx "${NEW_CONTEXT_NAME}" -n "${NS}"
+else
+  echo "kubie not found. Install it to use interactive context switching."
+  echo
+  echo "You can use kubectl directly:"
+  echo "  export KUBECONFIG=$OUT"
+fi
